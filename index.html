@@ -166,6 +166,93 @@
       if (typeof x === 'string') { const m = x.match(/-?\d+(\.\d+)?/); return m ? parseFloat(m[0]) : NaN; }
       return NaN;
     }
+
+    function getUserSelections() {
+      return {
+        brand: $('#brandSelect').value.trim(),
+        retailer: $('#retailerSelect').value.trim(),
+        poolType: $('#poolTypeSelect').value.trim(),
+        poolSize: +$('#poolSizeSelect').value,
+        desiredTB: +$('#storageTB').value
+      };
+    }
+
+    function calculateDriveCost(drive, desiredTB) {
+      const capacity = toNumber(drive[colMap.capacityTB]);
+      const price = toNumber(drive[colMap.priceUSD]);
+      if (!isFinite(capacity) || !isFinite(price) || capacity <= 0) return null;
+
+      const numDrives = Math.ceil(desiredTB / capacity);
+      const totalCost = numDrives * price;
+
+      return {
+        brand: drive[colMap.brand],
+        model: drive[colMap.model],
+        retailer: drive[colMap.retailer],
+        capacity,
+        price,
+        numDrives,
+        totalCost
+      };
+    }
+
+    function buildResultsTable(results) {
+      const container = $('#resultsTable');
+      container.innerHTML = '';
+
+      if (!results.length) {
+        container.innerHTML = '<p>No matching drives found.</p>';
+        return;
+      }
+
+      const table = document.createElement('table');
+      const thead = document.createElement('thead');
+      thead.innerHTML = `
+        <tr>
+          <th>Brand</th><th>Model</th><th>Retailer</th>
+          <th>Capacity (TB)</th><th>Price</th>
+          <th>Drives Needed</th><th>Total Cost</th>
+        </tr>`;
+      table.appendChild(thead);
+
+      const tbody = document.createElement('tbody');
+      for (const r of results) {
+        const row = document.createElement('tr');
+        row.innerHTML = `
+          <td>${escapeHtml(r.brand)}</td>
+          <td>${escapeHtml(r.model)}</td>
+          <td>${escapeHtml(r.retailer)}</td>
+          <td>${fmtTB(r.capacity)}</td>
+          <td>${fmtMoney(r.price)}</td>
+          <td>${r.numDrives}</td>
+          <td>${fmtMoney(r.totalCost)}</td>`;
+        tbody.appendChild(row);
+      }
+
+      table.appendChild(tbody);
+      container.appendChild(table);
+    }
+
+    function calculate() {
+      const selections = getUserSelections();
+      const prices = sheetObjects[TABS.Prices] || [];
+
+      const filtered = filterDrives(prices, selections);
+      const results = filtered
+        .map(drive => calculateDriveCost(drive, selections.desiredTB))
+        .filter(r => r !== null);
+
+      buildResultsTable(results);
+    }
+
+    function filterDrives(prices, selections) {
+      return prices.filter(drive => {
+        const brandMatch = !selections.brand || drive[colMap.brand] === selections.brand;
+        const retailerMatch = !selections.retailer || drive[colMap.retailer] === selections.retailer;
+        return brandMatch && retailerMatch;
+      });
+    }
+
     function dataTableToObjects(dt) {
       const rows = dt.getNumberOfRows();
       const cols = dt.getNumberOfColumns();
@@ -340,4 +427,5 @@
 
     google.charts.load('current', { packages: ['corechart'] });
     google.charts.setOnLoadCallback(init);
-</script>
+  </script>
+</body>
