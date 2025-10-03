@@ -1,0 +1,343 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Drive Cost Calculator</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <!-- Material Components Web CSS -->
+  <link rel="stylesheet" href="https://unpkg.com/material-components-web@latest/dist/material-components-web.min.css">
+  <!-- Material Icons -->
+  <link rel="stylesheet" href="https://fonts.googleapis.com/icon?family=Material+Icons">
+  <!-- MDC Web JavaScript -->
+  <script src="https://unpkg.com/material-components-web@latest/dist/material-components-web.min.js"></script>
+  <script src="https://www.gstatic.com/charts/loader.js"></script>
+
+  <style>
+    body {
+      padding: 20px;
+      font-family: 'Roboto', sans-serif;
+      background: #fafafa;
+    }
+    .container {
+      max-width: 1180px;
+      margin: 0 auto;
+    }
+    h3 { margin: 8px 0 16px; }
+    .filters {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 16px;
+      align-items: end;
+    }
+    .mdc-textfield { width: 100%; }
+    .actions {
+      margin-top: 8px;
+      display: flex;
+      gap: 12px;
+      flex-wrap: wrap;
+      align-items: center;
+    }
+    .results {
+      margin-top: 28px;
+      background: white;
+      border-radius: 6px;
+      padding: 16px;
+      box-shadow: 0 2px 6px rgba(0,0,0,0.08);
+      overflow-x: auto;
+    }
+    table {
+      border-collapse: collapse;
+      width: 100%;
+      min-width: 980px;
+    }
+    th, td {
+      border-bottom: 1px solid #eee;
+      text-align: left;
+      padding: 8px 10px;
+      white-space: nowrap;
+    }
+    th {
+      font-weight: 600;
+      background: #fafafa;
+      position: sticky;
+      top: 0;
+      z-index: 1;
+    }
+    .muted { color: #777; }
+    .loading {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      color: #555;
+    }
+    .spinner {
+      width: 16px; height: 16px;
+      border: 2px solid #ccc;
+      border-top-color: #3f51b5;
+      border-radius: 50%;
+      animation: spin 0.9s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .error {
+      color: #b00020;
+      background: #fde7eb;
+      border: 1px solid #f5c2cb;
+      padding: 10px 12px;
+      border-radius: 4px;
+      margin-top: 12px;
+    }
+    .nowrap { white-space: nowrap; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h3>Drive Cost Calculator</h3>
+
+    <!-- Filters -->
+    <div class="filters">
+      <div class="mdc-textfield mdl-js-textfield mdc-textfield--floating-label">
+        <input class="mdc-textfield__input" type="number" id="storageTB" value="54" min="1" step="1" />
+        <label class="mdc-textfield__label" for="storageTB">Available Storage Required (TB)</label>
+      </div>
+
+      <div class="mdc-textfield mdl-js-textfield mdc-textfield--floating-label">
+        <select class="mdc-textfield__input" id="brandSelect"></select>
+        <label class="mdc-textfield__label" for="brandSelect">Brand</label>
+      </div>
+
+      <div class="mdc-textfield mdl-js-textfield mdc-textfield--floating-label">
+        <select class="mdc-textfield__input" id="poolTypeSelect"></select>
+        <label class="mdc-textfield__label" for="poolTypeSelect">Disk Pool Type</label>
+      </div>
+
+      <div class="mdc-textfield mdl-js-textfield mdc-textfield--floating-label">
+        <select class="mdc-textfield__input" id="poolSizeSelect"></select>
+        <label class="mdc-textfield__label" for="poolSizeSelect">Target Disk Pool Size (drives per vdev)</label>
+      </div>
+
+      <div class="mdc-textfield mdl-js-textfield mdc-textfield--floating-label">
+        <select class="mdc-textfield__input" id="retailerSelect"></select>
+        <label class="mdc-textfield__label" for="retailerSelect">Retailer</label>
+      </div>
+    </div>
+
+    <div class="actions">
+      <button class="mdl-button mdl-js-button mdl-button--raised mdl-button--colored" id="calcBtn" title="Compute best combos">
+        <i class="material-icons" style="vertical-align: middle;">calculate</i> &nbsp;Calculate
+      </button>
+      <button class="mdl-button mdl-js-button" id="resetBtn" title="Clear all filters">
+        <i class="material-icons" style="vertical-align: middle;">refresh</i> &nbsp;Reset Filters
+      </button>
+      <button class="mdl-button mdl-js-button" id="csvBtn" title="Download current results CSV">
+        <i class="material-icons" style="vertical-align: middle;">download</i> &nbsp;Download CSV
+      </button>
+      <span id="status" class="loading" style="display:none;">
+        <span class="spinner"></span> Loading…
+      </span>
+    </div>
+
+    <div id="message"></div>
+
+    <div class="results">
+      <div id="results"></div>
+    </div>
+  </div>
+
+  <script>
+    // === Configuration ===
+    const SHEET_ID = '1IwnGfHlA9bA49JINARk0OFfDExH20zEAM4bhPFwQvDY';
+    const TABS = { Prices: 'Prices', Choices: 'Choices', Magic: 'Magic', Frontend: 'Frontend' };
+
+    // === State ===
+    const sheetData = {};
+    const sheetObjects = {};
+    let colMap = {};
+
+    // === Utilities ===
+    const $ = sel => document.querySelector(sel);
+    const show = (el) => el.style.display = '';
+    const hide = (el) => el.style.display = 'none';
+    const fmtMoney = n => isFinite(n) ? '$' + n.toFixed(2) : '';
+    const fmtTB = n => isFinite(n) ? (Math.round(n * 100) / 100).toString().replace(/\.00$/, '') : '';
+    function escapeHtml(s) { return String(s ?? '').replace(/[&<>"']/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m])); }
+    function normalizeLabel(s) { return String(s || '').toLowerCase().replace(/[^a-z0-9]/g, ''); }
+    function toNumber(x) {
+      if (typeof x === 'number') return x;
+      if (typeof x === 'string') { const m = x.match(/-?\d+(\.\d+)?/); return m ? parseFloat(m[0]) : NaN; }
+      return NaN;
+    }
+    function dataTableToObjects(dt) {
+      const rows = dt.getNumberOfRows();
+      const cols = dt.getNumberOfColumns();
+      const labels = [];
+      for (let c = 0; c < cols; c++) labels.push(dt.getColumnLabel(c) || `col_${c}`);
+      const out = [];
+      for (let r = 0; r < rows; r++) {
+        const obj = {};
+        for (let c = 0; c < cols; c++) {
+          let v = dt.getValue(r, c);
+          if (typeof v === 'string') v = v.trim();
+          obj[labels[c]] = v;
+        }
+        out.push(obj);
+      }
+      return out;
+    }
+    function findColumns(dt) {
+      const labels = Array.from({length: dt.getNumberOfColumns()}, (_, c) => dt.getColumnLabel(c));
+      const normalized = labels.map(l => normalizeLabel(l));
+      const map = {};
+      const lookups = {
+        brand:     ['brand','manufacturer','vendor','make'],
+        retailer:  ['retailer','store','seller','shop'],
+        capacityTB:['capacitytb','capacity','tb','sizetb','drivetb'],
+        priceUSD:  ['priceusd','price','usd','cost','price$'],
+        model:     ['model','sku','partnumber','pn','product'],
+      };
+      const find = (cands) => {
+        for (const cand of cands) {
+          const idx = normalized.findIndex(n => n === cand || n.endsWith(cand) || n.includes(cand));
+          if (idx !== -1) return labels[idx];
+        }
+        return null;
+      };
+      map.brand = find(lookups.brand);
+      map.retailer = find(lookups.retailer);
+      map.capacityTB = find(lookups.capacityTB);
+      map.priceUSD = find(lookups.priceUSD);
+      map.model = find(lookups.model);
+      console.info('[Prices] Column map:', map);
+      return map;
+    }
+    function uniqueSorted(values) {
+      return Array.from(new Set(values.filter(v => v !== null && v !== undefined && String(v).trim() !== '')))
+        .map(v => (typeof v === 'string' ? v.trim() : v))
+        .sort((a, b) => ('' + a).localeCompare('' + b, undefined, { numeric: true, sensitivity: 'base' }));
+    }
+    function populateSelect(selectEl, values, anyLabel) {
+      selectEl.innerHTML = '';
+      const optAny = document.createElement('option');
+      optAny.value = '';
+      optAny.textContent = anyLabel || 'Any';
+      selectEl.appendChild(optAny);
+      for (const v of values) {
+        const opt = document.createElement('option');
+        opt.value = v;
+        opt.textContent = v;
+        selectEl.appendChild(opt);
+      }
+    }
+
+    // === Data Fetch ===
+    function fetchTab(tabName) {
+      return new Promise((resolve, reject) => {
+        const url = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?sheet=${encodeURIComponent(tabName)}`;
+        const query = new google.visualization.Query(url);
+        query.send(resp => {
+          if (resp.isError && resp.isError()) {
+            reject(new Error(`Error fetching ${tabName}: ${resp.getMessage?.()} (${resp.getDetailedMessage?.()})`));
+            return;
+          }
+          const dt = resp.getDataTable();
+          sheetData[tabName] = dt;
+          sheetObjects[tabName] = dataTableToObjects(dt);
+          resolve(dt);
+        });
+      });
+    }
+
+    // === Init ===
+    function init() {
+      const status = $('#status');
+      show(status);
+      const tabsToLoad = Object.values(TABS);
+
+      Promise.allSettled(tabsToLoad.map(fetchTab))
+        .then(() => {
+          hide(status);
+          const pricesDT = sheetData[TABS.Prices];
+          if (!pricesDT) {
+            showError(`Could not load the "${TABS.Prices}" tab. Ensure the sheet is shared "Anyone with the link can view".`);
+            return;
+          }
+          colMap = findColumns(pricesDT);
+          if (!colMap.capacityTB || !colMap.priceUSD) {
+            console.warn('Expected columns not found. Detected map:', colMap);
+          }
+          populateDropdowns();
+          wireUpEvents();
+          calculate(); // initial render
+        })
+        .catch(err => {
+          hide(status);
+          showError(err.message || String(err));
+        });
+    }
+
+    function showError(msg) {
+      $('#message').innerHTML = `<div class="error"><strong>Error:</strong> ${escapeHtml(msg)}</div>`;
+    }
+
+    // === UI Population ===
+    function populateDropdowns() {
+      const prices = sheetObjects[TABS.Prices] || [];
+      const choices = sheetObjects[TABS.Choices] || [];
+
+      const choiceCols = choices.length ? Object.keys(choices[0]) : [];
+      const getChoiceValues = (col) => {
+        const hit = choiceCols.find(h => normalizeLabel(h) === normalizeLabel(col));
+        return hit ? choices.map(o => o[hit]) : [];
+      };
+
+      let brands = getChoiceValues('Brand');
+      let poolTypes = getChoiceValues('PoolType');
+      let poolSizes = getChoiceValues('PoolSize');
+      let retailers = getChoiceValues('Retailer');
+
+      if (!brands.length && colMap.brand)    brands = prices.map(p => p[colMap.brand]);
+      if (!retailers.length && colMap.retailer) retailers = prices.map(p => p[colMap.retailer]);
+      if (!poolTypes.length) poolTypes = ['RAIDZ1', 'RAIDZ2', 'RAIDZ3', 'Mirror'];
+      if (!poolSizes.length) poolSizes = Array.from({length: 13}, (_, i) => i + 4);
+      else poolSizes = poolSizes.map(v => { const n = +v; return Number.isFinite(n) ? n : v; });
+
+      populateSelect($('#brandSelect'), uniqueSorted(brands), 'Any brand');
+      populateSelect($('#poolTypeSelect'), uniqueSorted(poolTypes), 'Any pool type');
+      populateSelect($('#poolSizeSelect'), uniqueSorted(poolSizes), 'Any pool size');
+      populateSelect($('#retailerSelect'), uniqueSorted(retailers), 'Any retailer');
+    }
+
+    function wireUpEvents() {
+      $('#calcBtn').addEventListener('click', calculate);
+      $('#resetBtn').addEventListener('click', () => {
+        $('#brandSelect').value = '';
+        $('#poolTypeSelect').value = '';
+        $('#poolSizeSelect').value = '';
+        $('#retailerSelect').value = '';
+        calculate();
+      });
+      $('#csvBtn').addEventListener('click', downloadCSV);
+      ['#brandSelect', '#poolTypeSelect', '#poolSizeSelect', '#retailerSelect', '#storageTB']
+        .forEach(sel => $(sel).addEventListener('change', calculate));
+    }
+
+    // === Pool math helpers ===
+    function parsePoolType(ptRaw) {
+      const s = String(ptRaw || '').toLowerCase().replace(/[^a-z0-9]/g, '');
+      if (!s) return { type: 'any', parity: 0, mirror: false };
+      if (s.startsWith('raidz')) {
+        const parity = Number(s.replace('raidz','')) || 1;
+        return { type: `RAIDZ${parity}`, parity, mirror: false };
+      }
+      if (s.startsWith('mirror')) {
+        const n = Number(s.replace('mirror','')) || 2;
+      }
+    }
+
+  window.addEventListener('DOMContentLoaded', () => {
+    mdc.autoInit(); // Automatically initialize MDC components
+  });
+
+
+    google.charts.load('current', { packages: ['corechart'] });
+    google.charts.setOnLoadCallback(init);
+</script>
